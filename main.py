@@ -1,37 +1,31 @@
 import os
-import shutil
+import requests
 import time
-import json
-from fastapi import FastAPI, Form, File, UploadFile, HTTPException
+import shutil
+import google.generativeai as genai
+from fastapi import FastAPI, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from groq import Groq
-import google.generativeai as genai
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Safety Check
 if not GROQ_API_KEY or not GEMINI_API_KEY:
-    print("⚠️  CRITICAL: API Keys missing in .env or Render Environment Variables.")
+    print("⚠️ CRITICAL: API Keys missing.")
 
 # Initialize Clients
-try:
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    genai.configure(api_key=GEMINI_API_KEY)
-except Exception as e:
-    print(f"❌ Client Init Error: {e}")
+groq_client = Groq(api_key=GROQ_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
 
-# --- 2. SECURITY (CORS) ---
-# This allows your Cloudflare frontend to talk to this Render backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, change this to your Cloudflare URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,136 +33,114 @@ app.add_middleware(
 
 os.makedirs("temp", exist_ok=True)
 
-# --- 3. HELPER FUNCTIONS ---
+# --- CORE FUNCTIONS ---
 
-def transcribe_audio_groq(file_path):
+def download_file_from_url(url, filename):
     """
-    Uses Groq (Whisper-Large-V3) to transcribe uploaded audio files.
+    Downloads a file from a direct URL (provided by Piped/Cobalt).
+    This bypasses yt-dlp on the server.
     """
-    print(f"🎙️ Transcribing file: {file_path}")
+    print(f"⬇️ Downloading audio from relay: {url[:50]}...")
+    try:
+        # We use a stream to handle large files without memory issues
+        with requests.get(url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(filename, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        return True
+    except Exception as e:
+        print(f"❌ Download Error: {e}")
+        return False
+
+def transcribe_with_groq(file_path):
+    """Transcribes audio using Groq (Whisper Large)."""
+    print("🎙️ Transcribing with Groq...")
     try:
         with open(file_path, "rb") as file:
-            transcription = groq_client.audio.transcriptions.create(
+            return groq_client.audio.transcriptions.create(
                 file=(file_path, file.read()),
                 model="whisper-large-v3",
-                response_format="text",
-                language="en" # Detects automatically if omitted, but 'en' is faster
+                response_format="text"
             )
-        return transcription
     except Exception as e:
-        print(f"❌ Groq Transcription Failed: {e}")
+        print(f"❌ Groq Error: {e}")
         return None
 
-def generate_study_material(text, target_language="English"):
-    """
-    Uses Gemini 2.0 Flash to generate Notes + Quiz.
-    """
-    if not text:
-        return None
-
-    print(f"🧠 Generating Notes via Gemini (Length: {len(text)} chars)...")
+def generate_notes(text, language):
+    """Summarizes text using Gemini."""
+    if not text: return None
+    print("🧠 Generating Notes with Gemini...")
     
     model = genai.GenerativeModel('gemini-2.0-flash')
-    
     prompt = f"""
-    You are an expert AI tutor. 
-    TARGET LANGUAGE: {target_language}
+    You are an expert AI tutor. Target Language: {language}.
     
-    Task:
-    1. Summarize the video content in standard Markdown.
-    2. Extract key bullet points.
-    3. Create a short quiz in JSON format at the end.
+    Create a study guide from this transcript:
+    1. Summary (Markdown).
+    2. Key Concepts (Bullet points).
+    3. Quiz (JSON).
 
-    STRICT OUTPUT FORMAT:
-    
+    Format:
     # 📝 Summary
-    [Your summary here...]
-
+    ...
     ## 🔑 Key Concepts
-    - [Point 1]
-    - [Point 2]
-    - [Point 3]
-
+    ...
     ## 🧠 Quiz
     ```json
-    [
-        {{ "question": "Question text?", "options": ["A", "B", "C", "D"], "answer": 0 }},
-        {{ "question": "Question text?", "options": ["A", "B", "C", "D"], "answer": 1 }}
-    ]
+    [ {{ "question": "...", "options": ["A","B"], "answer": 0 }} ]
     ```
 
-    TRANSCRIPT DATA:
-    {text[:100000]} 
+    Transcript:
+    {text[:100000]}
     """
-
     try:
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Gemini Error: {str(e)}"
+        return f"Gemini Error: {e}"
 
-# --- 4. API ENDPOINTS ---
+# --- ENDPOINTS ---
 
-@app.get("/")
-async def health_check():
-    return {"status": "active", "mode": "Client-Handoff", "version": "2.0"}
+@app.post("/process-audio-url")
+async def process_audio_url(audio_url: str = Form(...), language: str = Form(...)):
+    """
+    Receives a direct Audio Link (from Piped), downloads, transcribes, and summarizes.
+    """
+    temp_filename = f"temp/{int(time.time())}.mp3"
+    
+    try:
+        # 1. Download the Audio (Server-side, but from a Relay URL)
+        success = download_file_from_url(audio_url, temp_filename)
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to download audio from relay link.")
+
+        # 2. Transcribe
+        transcript = transcribe_with_groq(temp_filename)
+        if not transcript:
+            raise HTTPException(status_code=500, detail="Transcription failed.")
+
+        # 3. Summarize
+        notes = generate_notes(transcript, language)
+        
+        return {"status": "success", "markdown": notes, "transcript": transcript}
+
+    finally:
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
 
 @app.post("/process-transcript")
 async def process_transcript(transcript: str = Form(...), language: str = Form(...)):
-    """
-    METHOD A (Primary): Frontend sends the text directly.
-    Fastest method. No downloading required.
-    """
-    if not transcript or len(transcript) < 10:
-        raise HTTPException(status_code=400, detail="Transcript is empty or too short.")
+    """Backup: If frontend already found text, just summarize it."""
+    notes = generate_notes(transcript, language)
+    return {"status": "success", "markdown": notes}
 
-    notes = generate_study_material(transcript, language)
-    return {"status": "success", "markdown": notes, "source": "text-handoff"}
-
-@app.post("/process-audio")
-async def process_audio(file: UploadFile = File(...), language: str = Form(...)):
-    """
-    METHOD B (Backup): Frontend uploads an MP3 file.
-    Used when the browser cannot find captions and the user uploads a file manually.
-    """
-    temp_filename = f"temp/{int(time.time())}_{file.filename}"
-    
-    try:
-        # 1. Save File
-        with open(temp_filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        # 2. Transcribe
-        transcript = transcribe_audio_groq(temp_filename)
-        if not transcript:
-            raise HTTPException(status_code=500, detail="Transcription failed")
-            
-        # 3. Generate Notes
-        notes = generate_study_material(transcript, language)
-        
-        return {"status": "success", "markdown": notes, "source": "audio-upload"}
-
-    except Exception as e:
-        return {"error": str(e)}
-        
-    finally:
-        # 4. Cleanup
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
-# --- ADD THIS TO main.py IF YOU WANT CHAT TO WORK ---
 @app.post("/chat")
 async def chat_endpoint(question: str = Form(...), transcript: str = Form(...)):
-    if not question or not transcript:
-        return {"answer": "Error: Missing data."}
-    
     model = genai.GenerativeModel('gemini-2.0-flash')
-    prompt = f"""
-    You are a helpful assistant. Answer the question based strictly on the transcript below.
-    User Question: {question}
-    Transcript Context: {transcript[:20000]}
-    """
+    prompt = f"Context: {transcript[:20000]}\n\nUser: {question}\nAnswer:"
     try:
         response = model.generate_content(prompt)
         return {"answer": response.text}
-    except Exception as e:
-        return {"answer": "I'm having trouble thinking right now."}
+    except:
+        return {"answer": "I am having trouble thinking right now."}
