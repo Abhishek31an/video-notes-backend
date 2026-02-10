@@ -1,5 +1,5 @@
 # 1. Use an official Python runtime as a parent image
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 # 2. Install system dependencies (FFmpeg is crucial here!)
 RUN apt-get update && \
