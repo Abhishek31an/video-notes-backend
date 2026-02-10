@@ -1,305 +1,150 @@
 import os
-import time
-import json
-import math
-import yt_dlp
-from dotenv import load_dotenv
-from groq import Groq
-import google.generativeai as genai
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-import base64
-import requests # <--- Add this at the very top if missing!
-import random
+import requests
 import re
-from pytubefix import YouTube
-from pytubefix.cli import on_progress
+import time
+from urllib.parse import urlparse, parse_qs
 
-# --- 1. CONFIGURATION ---
-load_dotenv()
+# --- CONFIGURATION ---
+# List of Cobalt Instances (Wrappers that download for you)
+# These run on various servers, effectively rotating your IP for you.
+COBALT_INSTANCES = [
+    "https://api.cobalt.best",         # Often reliable
+    "https://cobalt.moskas.io",        # Alternative
+    "https://on.soundcloud.com",       # (Just kidding, placeholder for rotation logic)
+    "https://api.cobalt.kwiatekmiki.pl",
+    "https://cobalt.steamys.me",
+    "https://cobalt.q11.app",
+]
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# List of Piped Instances (YouTube Frontend APIs)
+# Piped proxies streams, bypassing the IP check.
+PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",
+    "https://api.piped.privacy.com.de",
+    "https://pipedapi.drgns.space",
+    "https://api-piped.mha.fi",
+]
 
-if not GROQ_API_KEY or not GEMINI_API_KEY:
-    raise ValueError("❌ Missing API Keys. Please check your .env file.")
+def get_video_id(url):
+    """Extracts video ID from various YouTube URL formats."""
+    query = urlparse(url)
+    if query.hostname == 'youtu.be':
+        return query.path[1:]
+    if query.hostname in ('www.youtube.com', 'youtube.com'):
+        if query.path == '/watch':
+            p = parse_qs(query.query)
+            return p['v'][0]
+        if query.path[:7] == '/embed/':
+            return query.path.split('/')[2]
+        if query.path[:3] == '/v/':
+            return query.path.split('/')[3]
+    return None
 
-# Initialize Clients
-groq_client = Groq(api_key=GROQ_API_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
-
-app = FastAPI()
-
-# --- SECURITY CONFIGURATION (CORS) ---
-# This allows the frontend (Cloudflare) to talk to the backend (Render)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows ALL websites (Simplest for now)
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"],
-)
-os.makedirs("static", exist_ok=True)
-# --- 2. AUDIO ENGINE (Video Download) ---
-
-# --- 2. AUDIO ENGINE (Video Download) ---
-
-# --- 2. AUDIO ENGINE (Video Download) ---
-# --- 2. AUDIO ENGINE (Video Download) ---
-def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
+def download_audio_federated(video_url: str, output_filename="temp_audio"):
     """
-    Downloader V4: Uses 'pytubefix' (Android Client Spoofing).
-    This library is designed specifically to fix the "Sign In" error.
+    Strategy: 
+    1. Try Cobalt Mirrors (Downloads file on their server, sends to us).
+    2. Try Piped API (Gets a proxied stream URL).
     """
     output_path = os.path.join(os.getcwd(), output_filename + ".mp3")
     
-    # Cleanup old file
+    # 1. Setup
     if os.path.exists(output_path):
         os.remove(output_path)
+    
+    print(f"🚀 Starting Federated Download for: {video_url}")
 
-    print(f"🔄 Processing with Pytubefix: {video_url}")
+    # --- STRATEGY A: COBALT ROTATOR ---
+    print("⚔️  Attempting Cobalt Instances...")
+    
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
 
-    try:
-        # 1. Initialize Pytubefix with 'Android' client (The Bypass)
-        yt = YouTube(video_url, client='ANDROID')
-        
-        # 2. Get the audio stream
-        print(f"🎯 Found Video: {yt.title}")
-        audio_stream = yt.streams.get_audio_only()
-        
-        if not audio_stream:
-            print("❌ No audio stream found.")
-            return None
+    cobalt_payload = {
+        "url": video_url,
+        "vCodec": "h264",
+        "vQuality": "720",
+        "aFormat": "mp3",
+        "isAudioOnly": True
+    }
 
-        # 3. Download
-        # Pytube downloads as .m4a or .webm usually
-        downloaded_file = audio_stream.download(filename=output_filename)
-        
-        # 4. Rename/Convert to ensured .mp3 path if needed
-        # (Render needs clear file paths)
-        base, ext = os.path.splitext(downloaded_file)
-        new_file = base + ".mp3"
-        
-        # Simple rename if it downloaded as something else
-        if downloaded_file != new_file:
-            if os.path.exists(new_file):
-                os.remove(new_file)
-            os.rename(downloaded_file, new_file)
-            
-        print(f"✅ Download Success: {new_file}")
-        return new_file
-
-    except Exception as e:
-        print(f"❌ Pytubefix Failed: {e}")
-        
-        # --- FINAL FALLBACK: COBALT API (Hardcoded Reliable List) ---
-        print("⚠️ Trying Cobalt API Fallback...")
+    for instance in COBALT_INSTANCES:
         try:
-            # We use the most reliable "ggtyler" instance directly
-            api_url = "https://cal1.coapi.ggtyler.dev/api/json"
-            headers = {"Accept": "application/json", "Content-Type": "application/json"}
-            data = {
-                "url": video_url,
-                "vCodec": "h264", 
-                "vQuality": "720", 
-                "aFormat": "mp3", 
-                "isAudioOnly": True
-            }
+            api_url = f"{instance}/api/json"
+            print(f"   -> Trying {instance}...", end=" ")
             
-            resp = requests.post(api_url, json=data, headers=headers, timeout=10)
+            resp = requests.post(api_url, json=cobalt_payload, headers=headers, timeout=15)
+            
             if resp.status_code == 200:
-                link = resp.json().get("url")
-                if link:
-                    with requests.get(link, stream=True) as r:
+                data = resp.json()
+                download_link = data.get("url")
+                
+                if download_link:
+                    print("✅ Link found! Downloading...")
+                    # Stream download to file
+                    with requests.get(download_link, stream=True, timeout=30) as r:
                         r.raise_for_status()
                         with open(output_path, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
-                    if os.path.getsize(output_path) > 1024:
+                    
+                    if os.path.getsize(output_path) > 1024: # Check valid file size
+                        print(f"🎉 Success via Cobalt: {instance}")
                         return output_path
-        except Exception as api_e:
-            print(f"❌ API Fallback also failed: {api_e}")
-
-        return None
-# --- 3. AI ENGINE (Transcription & Generation) ---
-MODEL_PRIORITY_LIST = [
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash-preview-09-2025',
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-2.0-flash-001',
-    'gemini-2.0-flash-lite-001',
-    'gemini-flash-latest',
-    'gemini-flash-lite-latest',
-    'gemini-3-flash-preview',       # 🚀 Gemini 3 Preview!
-    'gemini-2.5-pro',
-    'gemini-pro-latest',
-    'gemini-3-pro-preview',         # 🚀 Gemini 3 Pro!
-    'gemini-exp-1206',
-    'gemma-3-27b-it',               # Gemma models as final backups
-    'gemma-3-12b-it',
-    'gemma-3-4b-it'
-]
-
-def get_working_gemini_response(prompt_parts):
-    """Helper: Tries multiple Gemini models until one works."""
-    for i, model_name in enumerate(MODEL_PRIORITY_LIST):
-        try:
-            # print(f"🤖 Attempt {i+1}: {model_name}...") 
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt_parts)
-            return response.text
-        except Exception as e:
-            error_msg = str(e)
-            if "429" in error_msg:
-                print(f"⚠️ Quota Limit on {model_name}. Switching...")
-                time.sleep(1 + (i * 0.5)) # Increasing delay (1s, 1.5s, 2s...) to let API cool down
-                continue
-            elif "404" in error_msg:
-                # Silently skip models that aren't available for your key/region
-                continue
-            else:
-                print(f"❌ Error on {model_name}: {e}")
-                continue
-    
-    return "Sorry, the AI is currently overloaded. Please wait 1 minute and try again."
-
-def transcribe_with_gemini(audio_path):
-    """Backup transcription using Gemini."""
-    print("⚠️ Switching to Gemini Backup...")
-    try:
-        audio_file = genai.upload_file(path=audio_path)
-        while audio_file.state.name == "PROCESSING":
-            time.sleep(1)
-            audio_file = genai.get_file(audio_file.name)
-        
-        prompt = [audio_file, "Transcribe exactly word for word. Output raw text."]
-        return get_working_gemini_response(prompt)
-    except Exception as e:
-        print(f"❌ Gemini Transcribe Error: {e}")
-        return None
-
-def transcribe_audio(audio_path):
-    """Primary transcription using Groq (Whisper)."""
-    print("🎙️ Transcribing with Groq...")
-    try:
-        with open(audio_path, "rb") as file:
-            return groq_client.audio.transcriptions.create(
-                file=(audio_path, file.read()),
-                model="whisper-large-v3",
-                response_format="text",
-                language="en"
-            )
-    except Exception as e:
-        print(f"⚠️ Groq Failed ({e}), switching to backup...")
-        return transcribe_with_gemini(audio_path)
-
-def generate_study_notes(transcript_text, target_language="English"):
-    """Generates notes + Quiz."""
-    if not transcript_text: return None
-    
-    # Estimate length
-    words = len(transcript_text.split())
-    minutes = math.ceil(words / 150)
-    target_length = max(300, min(1200, 200 + (minutes * 15)))
-    
-    print(f"🧠 Generating Notes ({target_language})...")
-
-    prompt = f"""
-    You are an expert AI tutor. 
-    Target Language: {target_language}.
-    Total Output Length: ~{target_length} words.
-
-    Generate:
-    1. A Markdown Summary & Key Concepts.
-    2. A JSON Quiz block at the end.
-
-    Format:
-    # 📝 Video Summary
-    [Summary]
-    ## 🔑 Key Concepts
-    - [Points]
-    
-    ```json
-    [
-        {{ "question": "...", "options": ["A", "B", "C", "D"], "answer": 0 }}
-    ]
-    ```
-
-    **Transcript:**
-    {transcript_text}
-    """
-    return get_working_gemini_response(prompt)
-
-def chat_with_video(transcript_text, user_question):
-    """
-    Chat Bot: Uses transcript as CONTEXT but allows general conversation.
-    Tries multiple models to ensure a response.
-    """
-    print(f"💬 Chatting... Q: {user_question[:20]}...")
-    
-    prompt = f"""
-    You are a helpful and friendly AI Assistant.
-    
-    You have access to a video transcript (provided below) which serves as CONTEXT for this conversation.
-    
-    **YOUR INSTRUCTIONS:**
-    1. **If the user asks about the video:** Use the transcript to answer accurately.
-    2. **If the user asks a general question (e.g., "Hi", "Who are you?", "Explain gravity"):** Answer normally using your own general knowledge. You do NOT need to stick to the transcript for these.
-    3. **Be Conversational:** Don't be robotic. If the user says "Hi", say "Hi! How can I help you with this video?"
-    
-    **Video Transcript Context:**
-    {transcript_text[:15000]}
-    
-    **User Question:**
-    {user_question}
-    """
-    
-    # --- USE THE GLOBAL LIST NOW ---
-    for i, model_name in enumerate(MODEL_PRIORITY_LIST):
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            # print(f"⚠️ Chat failed on {model_name}, trying next...")
-            continue 
-
-    return "Sorry, all AI models are currently busy. Please try again in a moment."
-
-# --- 4. API ENDPOINTS ---
-
-@app.get("/")
-async def read_root():
-    return {"message": "✅ Backend is running! Access this via your Frontend URL."}
-
-@app.post("/generate")
-async def generate_notes_endpoint(url: str = Form(...), language: str = Form(...)):
-    print(f"🚀 Processing: {url}")
-    audio_file = download_audio_nuclear(url)
-    if not audio_file: return {"error": "Download failed"}
-
-    try:
-        transcript = transcribe_audio(audio_file)
-        if not transcript: return {"error": "Transcription failed"}
-        
-        notes = generate_study_notes(transcript, language)
-        
-        # Clean up
-        if os.path.exists(audio_file): os.remove(audio_file)
             
-        return {"status": "success", "markdown": notes, "transcript": transcript}
-    except Exception as e:
-        return {"error": str(e)}
+            print("❌ Failed (Status/No Link)")
+            
+        except Exception as e:
+            print(f"⚠️ Error: {str(e)}")
+            continue # Try next instance
 
-@app.post("/chat")
-async def chat_endpoint(question: str = Form(...), transcript: str = Form(...)):
-    if not question or not transcript:
-        return {"answer": "Error: Missing data."}
+    # --- STRATEGY B: PIPED API FALLBACK ---
+    # If all Cobalt instances fail (likely due to overload), try Piped.
+    print("\n🛡️ All Cobalt instances failed. Engaging Piped API fallback...")
     
-    answer = chat_with_video(transcript, question)
-    return {"answer": answer}
+    video_id = get_video_id(video_url)
+    if not video_id:
+        print("❌ Could not extract Video ID for Piped.")
+        return None
+
+    for instance in PIPED_INSTANCES:
+        try:
+            # Piped Endpoint: /streams/{video_id}
+            api_url = f"{instance}/streams/{video_id}"
+            print(f"   -> Trying Piped {instance}...", end=" ")
+            
+            resp = requests.get(api_url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                audio_streams = data.get("audioStreams", [])
+                
+                # Sort by bitrate (highest first) and pick mp3/m4a
+                # Piped usually returns m4a, we might need to rely on ffmpeg later or just save as mp3
+                target_stream = next((s for s in audio_streams if s.get("format") == "M4A" or s.get("mimeType", "").startswith("audio")), None)
+                
+                if target_stream:
+                    stream_url = target_stream["url"]
+                    print("✅ Stream found! Downloading...")
+                    
+                    # NOTE: Piped streams might be proxied. If they are direct Google links, 
+                    # Render might block them. We hope for a proxied link.
+                    with requests.get(stream_url, stream=True, timeout=30) as r:
+                        r.raise_for_status()
+                        with open(output_path, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                                
+                    if os.path.getsize(output_path) > 1024:
+                        print(f"🎉 Success via Piped: {instance}")
+                        return output_path
+            print("❌ Failed")
+            
+        except Exception as e:
+            print(f"⚠️ Error: {str(e)}")
+            continue
+
+    print("💀 Total Failure: No instances could download the audio.")
+    return None
