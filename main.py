@@ -15,6 +15,8 @@ import base64
 import requests # <--- Add this at the very top if missing!
 import random
 import re
+from pytubefix import YouTube
+from pytubefix.cli import on_progress
 
 # --- 1. CONFIGURATION ---
 load_dotenv()
@@ -46,12 +48,11 @@ os.makedirs("static", exist_ok=True)
 # --- 2. AUDIO ENGINE (Video Download) ---
 
 # --- 2. AUDIO ENGINE (Video Download) ---
+# --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
     """
-    Hybrid Downloader V3:
-    1. Cobalt APIs (Primary - Fast)
-    2. Invidious APIs (Backup - Reliable)
-    3. NO local yt-dlp (Because Render IP is banned)
+    Downloader V4: Uses 'pytubefix' (Android Client Spoofing).
+    This library is designed specifically to fix the "Sign In" error.
     """
     output_path = os.path.join(os.getcwd(), output_filename + ".mp3")
     
@@ -59,100 +60,70 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
     if os.path.exists(output_path):
         os.remove(output_path)
 
-    print(f"🔄 Processing: {video_url}")
+    print(f"🔄 Processing with Pytubefix: {video_url}")
 
-    # --- STRATEGY 1: COBALT API MIRRORS ---
-    # We rotate through these. If one is down, we try the next.
-    cobalt_instances = [
-        "https://api.cobalt.tools/api/json",      # Official
-        "https://cobalt.xy2401.com/api/json",     # Backup 1
-        "https://cobalt.kwiatekmiki.pl/api/json", # Backup 2
-        "https://cobalt.lacus.mynetgear.com/api/json"
-    ]
-    
-    random.shuffle(cobalt_instances)
+    try:
+        # 1. Initialize Pytubefix with 'Android' client (The Bypass)
+        yt = YouTube(video_url, client='ANDROID')
+        
+        # 2. Get the audio stream
+        print(f"🎯 Found Video: {yt.title}")
+        audio_stream = yt.streams.get_audio_only()
+        
+        if not audio_stream:
+            print("❌ No audio stream found.")
+            return None
 
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-    }
+        # 3. Download
+        # Pytube downloads as .m4a or .webm usually
+        downloaded_file = audio_stream.download(filename=output_filename)
+        
+        # 4. Rename/Convert to ensured .mp3 path if needed
+        # (Render needs clear file paths)
+        base, ext = os.path.splitext(downloaded_file)
+        new_file = base + ".mp3"
+        
+        # Simple rename if it downloaded as something else
+        if downloaded_file != new_file:
+            if os.path.exists(new_file):
+                os.remove(new_file)
+            os.rename(downloaded_file, new_file)
+            
+        print(f"✅ Download Success: {new_file}")
+        return new_file
 
-    for api_url in cobalt_instances:
+    except Exception as e:
+        print(f"❌ Pytubefix Failed: {e}")
+        
+        # --- FINAL FALLBACK: COBALT API (Hardcoded Reliable List) ---
+        print("⚠️ Trying Cobalt API Fallback...")
         try:
-            # print(f"🌐 Trying Cobalt: {api_url}")
+            # We use the most reliable "ggtyler" instance directly
+            api_url = "https://cal1.coapi.ggtyler.dev/api/json"
+            headers = {"Accept": "application/json", "Content-Type": "application/json"}
             data = {
                 "url": video_url,
-                "vCodec": "h264",
-                "vQuality": "720",
-                "aFormat": "mp3",
+                "vCodec": "h264", 
+                "vQuality": "720", 
+                "aFormat": "mp3", 
                 "isAudioOnly": True
             }
             
-            # 5s timeout to fail fast
-            response = requests.post(api_url, json=data, headers=headers, timeout=5)
-            
-            if response.status_code == 200:
-                result = response.json()
-                direct_link = result.get("url") or result.get("picker", [{}])[0].get("url") or result.get("audio")
-                
-                if direct_link:
-                    print(f"✅ Cobalt Success! Downloading from: {api_url}")
-                    # Download the content
-                    with requests.get(direct_link, stream=True) as r:
+            resp = requests.post(api_url, json=data, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                link = resp.json().get("url")
+                if link:
+                    with requests.get(link, stream=True) as r:
                         r.raise_for_status()
                         with open(output_path, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
-                    return output_path
-        except Exception:
-            continue # Silently try next
+                    if os.path.getsize(output_path) > 1024:
+                        return output_path
+        except Exception as api_e:
+            print(f"❌ API Fallback also failed: {api_e}")
 
-    # --- STRATEGY 2: INVIDIOUS API (Backup) ---
-    # If Cobalt fails, we use Invidious API to get the raw stream
-    print("⚠️ Cobalt failed. Trying Invidious Backup...")
-    
-    # Extract Video ID (e.g. ySus5ZS0b94)
-    video_id = ""
-    if "v=" in video_url:
-        video_id = video_url.split("v=")[1].split("&")[0]
-    elif "youtu.be" in video_url:
-        video_id = video_url.split("/")[-1]
-
-    if video_id:
-        invidious_instances = [
-            "https://inv.tux.pizza",
-            "https://invidious.drgns.space",
-            "https://inv.zzls.xyz",
-        ]
-        
-        for inv_url in invidious_instances:
-            try:
-                # Get Video Info
-                api_req = f"{inv_url}/api/v1/videos/{video_id}"
-                resp = requests.get(api_req, timeout=5)
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Find an audio stream (m4a or webm)
-                    if "adaptiveFormats" in data:
-                        for fmt in data["adaptiveFormats"]:
-                            if "audio" in fmt.get("type", ""):
-                                stream_url = fmt.get("url")
-                                print(f"✅ Invidious Success! Downloading from: {inv_url}")
-                                
-                                # Download stream
-                                with requests.get(stream_url, stream=True) as r:
-                                    r.raise_for_status()
-                                    with open(output_path, 'wb') as f:
-                                        for chunk in r.iter_content(chunk_size=8192):
-                                            f.write(chunk)
-                                return output_path
-            except Exception:
-                continue
-
-    print("❌ All external APIs failed. Cannot download video on this IP.")
-    return None
+        return None
 # --- 3. AI ENGINE (Transcription & Generation) ---
 MODEL_PRIORITY_LIST = [
     'gemini-2.5-flash',
