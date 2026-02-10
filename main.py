@@ -38,47 +38,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 os.makedirs("static", exist_ok=True)
-
-# --- 2. AUDIO ENGINE (Video Download) ---
-# --- 2. AUDIO ENGINE (Video Download) ---
-# --- 2. AUDIO ENGINE (Video Download) ---
-# --- 2. AUDIO ENGINE (Video Download) ---
-# --- 2. AUDIO ENGINE (Video Download) ---
-  # <--- Make sure to import this at the top of your file!
-
 # --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
-    """Downloads audio using Base64 Encoded Cookies."""
+    """Downloads audio using Cookies AND Android Spoofing."""
     output_path = os.path.join(os.getcwd(), output_filename)
     cookie_file = os.path.join(os.getcwd(), "cookies.txt")
     
     # 1. DECODE COOKIES
     encoded_cookies = os.getenv("YOUTUBE_COOKIES")
-    
     if encoded_cookies:
         try:
-            # Decode the Base64 string back to original text
             decoded_bytes = base64.b64decode(encoded_cookies)
             decoded_str = decoded_bytes.decode('utf-8')
-
-            # Ensure header exists
             if not decoded_str.startswith("# Netscape"):
                 decoded_str = "# Netscape HTTP Cookie File\n" + decoded_str
-
             with open(cookie_file, "w") as f:
                 f.write(decoded_str)
-                
             print(f"🍪 Cookies decoded successfully!")
         except Exception as e:
             print(f"⚠️ Cookie Decode Error: {e}")
-    else:
-        print("⚠️ WARNING: No cookies found in environment variables!")
-
+            
     # Cleanup old audio
     if os.path.exists(f"{output_path}.mp3"):
         os.remove(f"{output_path}.mp3")
 
-    # 2. CONFIGURE DOWNLOADER
+    # 2. CONFIGURE DOWNLOADER (The Hybrid Fix)
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_path,
@@ -88,7 +72,16 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
         'no_warnings': True,
         'nocheckcertificate': True,
         'cookiefile': cookie_file,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        
+        # --- NEW TRICK: FORCE ANDROID CLIENT ---
+        # This tells YouTube we are an App, not a Browser.
+        # Apps often bypass the "IP Check" that blocks browser cookies.
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'],
+            }
+        },
+        'cachedir': False, # Disable cache to prevent old bad tokens
     }
 
     try:
