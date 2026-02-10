@@ -44,65 +44,57 @@ os.makedirs("static", exist_ok=True)
 
 # --- 2. AUDIO ENGINE (The New Federated Downloader) ---
 
-# List of Cobalt Instances (Wrappers that download for you)
+# --- 2. AUDIO ENGINE (The Federated Downloader V2) ---
+
+# Expanded Cobalt List (Mixed reliability, high rotation)
 COBALT_INSTANCES = [
-    "https://api.cobalt.best",
-    "https://cobalt.moskas.io",
-    "https://api.cobalt.kwiatekmiki.pl",
-    "https://cobalt.steamys.me",
-    "https://cobalt.q11.app",
-    "https://api.cobalt.tools"
+    "https://api.cobalt.best",                 # Reliable
+    "https://cobalt.moskas.io",                # Frequent updates
+    "https://cobalt.xy2401.com",               # Backup
+    "https://api.cobalt.kwiatekmiki.pl",       # Poland
+    "https://cobalt.steamys.me",               # US
+    "https://cobalt.q11.app",                  # US
+    "https://api.cobalt.minaev.su",            # Russia (often ignores IP bans)
+    "https://cobalt.lacus.mynetgear.com",      # Home hosting
+    "https://cobalt.mc.hzuccon.com",           # Brazil
+    "https://api.server.cobalt.tools",         # Official (Strict)
+    "https://cobalt.154.53.58.117.sslip.io",   # Direct IP
 ]
 
-# List of Piped Instances (YouTube Frontend APIs - Backup)
+# Expanded Piped List (Frontend APIs)
 PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.privacy.com.de",
-    "https://pipedapi.drgns.space",
-    "https://api-piped.mha.fi",
+    "https://pipedapi.tokhmi.xyz",             # US
+    "https://pipedapi.moomoo.me",              # UK
+    "https://pipedapi.syncpundit.io",          # India/Global
+    "https://pipedapi.kavin.rocks",            # Official (Often strict)
+    "https://piped-api.lunar.icu",             # Germany
+    "https://ytapi.dc09.ru",                   # Russia
+    "https://pipedapi.r4fo.com",               # Germany
+    "https://api.piped.yt",                    # Germany
+    "https://pipedapi.rivo.lol",               # Chile
+    "https://api-piped.mha.fi",                # Finland
+    "https://pipedapi.leptons.xyz",            # Austria
 ]
-
-def get_video_id(url):
-    """Extracts video ID from various YouTube URL formats."""
-    try:
-        query = urlparse(url)
-        if query.hostname == 'youtu.be':
-            return query.path[1:]
-        if query.hostname in ('www.youtube.com', 'youtube.com'):
-            if query.path == '/watch':
-                p = parse_qs(query.query)
-                return p['v'][0]
-            if query.path[:7] == '/embed/':
-                return query.path.split('/')[2]
-            if query.path[:3] == '/v/':
-                return query.path.split('/')[3]
-    except Exception:
-        return None
-    return None
 
 def download_audio_federated(video_url: str, output_filename="temp_audio"):
     """
-    Downloader V5: Federated Strategy.
-    1. Rotates through Cobalt Mirrors.
-    2. Falls back to Piped API.
-    3. No local yt-dlp/pytubefix to avoid IP Bans.
+    Downloader V5.1: Massive Rotation Strategy.
+    Brute-forces through a large list of mirrors to find one that allows Render IPs.
     """
-    # Ensure output path is absolute
     output_path = os.path.join(os.getcwd(), output_filename + ".mp3")
     
-    # Cleanup old file
     if os.path.exists(output_path):
         os.remove(output_path)
     
     print(f"🚀 Starting Federated Download for: {video_url}")
 
     # --- STRATEGY A: COBALT ROTATOR ---
-    print("⚔️  Attempting Cobalt Instances...")
+    print(f"⚔️  Attempting {len(COBALT_INSTANCES)} Cobalt Instances...")
     
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
 
     cobalt_payload = {
@@ -113,18 +105,15 @@ def download_audio_federated(video_url: str, output_filename="temp_audio"):
         "isAudioOnly": True
     }
 
-    # Shuffle instances to distribute load
     random.shuffle(COBALT_INSTANCES)
 
     for instance in COBALT_INSTANCES:
         try:
-            # Handle trailing slashes in URL
             base_url = instance.rstrip("/")
             api_url = f"{base_url}/api/json"
             
-            # print(f"   -> Trying {base_url}...", end=" ")
-            
-            resp = requests.post(api_url, json=cobalt_payload, headers=headers, timeout=10)
+            # Short timeout (6s) to skip dead servers fast
+            resp = requests.post(api_url, json=cobalt_payload, headers=headers, timeout=6)
             
             if resp.status_code == 200:
                 data = resp.json()
@@ -138,18 +127,20 @@ def download_audio_federated(video_url: str, output_filename="temp_audio"):
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
                     
-                    # Verify file
                     if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-                        print(f"🎉 Success via Cobalt.")
+                        print(f"🎉 Success via Cobalt: {base_url}")
                         return output_path
+            else:
+                # Print specific error codes (403=Forbidden, 429=RateLimit)
+                # print(f"   -> {base_url} returned {resp.status_code}")
+                pass
             
-            # print("❌ Failed")
-            
-        except Exception:
-            continue # Silently try next
+        except Exception as e:
+            # print(f"   -> {instance} Error: {str(e)[:50]}...")
+            continue
 
     # --- STRATEGY B: PIPED API FALLBACK ---
-    print("\n🛡️ All Cobalt instances failed. Engaging Piped API fallback...")
+    print(f"\n🛡️ Cobalt failed. Engaging {len(PIPED_INSTANCES)} Piped Mirrors...")
     
     video_id = get_video_id(video_url)
     if not video_id:
@@ -162,19 +153,19 @@ def download_audio_federated(video_url: str, output_filename="temp_audio"):
         try:
             base_url = instance.rstrip("/")
             api_url = f"{base_url}/streams/{video_id}"
-            print(f"   -> Trying Piped {base_url}...", end=" ")
             
-            resp = requests.get(api_url, timeout=10)
+            resp = requests.get(api_url, timeout=6)
+            
             if resp.status_code == 200:
                 data = resp.json()
                 audio_streams = data.get("audioStreams", [])
                 
-                # Sort by bitrate or find m4a/mp3
+                # Prioritize m4a/mp3
                 target_stream = next((s for s in audio_streams if s.get("mimeType", "").startswith("audio")), None)
                 
                 if target_stream:
                     stream_url = target_stream["url"]
-                    print("✅ Stream found! Downloading...")
+                    print(f"✅ Stream found via {base_url}! Downloading...")
                     
                     with requests.get(stream_url, stream=True, timeout=30) as r:
                         r.raise_for_status()
@@ -183,18 +174,17 @@ def download_audio_federated(video_url: str, output_filename="temp_audio"):
                                 f.write(chunk)
                                 
                     if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-                        print(f"🎉 Success via Piped.")
+                        print(f"🎉 Success via Piped: {base_url}")
                         return output_path
-            print("❌ Failed")
-            
-        except Exception as e:
-            print(f"⚠️ Error: {str(e)}")
+            else:
+                # print(f"   -> {base_url} returned {resp.status_code}")
+                pass
+                
+        except Exception:
             continue
 
-    print("💀 Total Failure: No instances could download the audio.")
+    print("💀 Total Failure: All mirrors blocked or down.")
     return None
-
-
 # --- 3. AI ENGINE (Transcription & Generation) ---
 
 MODEL_PRIORITY_LIST = [
