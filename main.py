@@ -42,17 +42,28 @@ os.makedirs("static", exist_ok=True)
 # --- 2. AUDIO ENGINE (Video Download) ---
 # --- 2. AUDIO ENGINE (Video Download) ---
 # --- 2. AUDIO ENGINE (Video Download) ---
+# --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
-    """Downloads audio using Cookies to bypass Bot Detection."""
+    """Downloads audio using Cookies (with Auto-Fix for formatting)."""
     output_path = os.path.join(os.getcwd(), output_filename)
     cookie_file = os.path.join(os.getcwd(), "cookies.txt")
     
-    # 1. CREATE COOKIE FILE FROM ENV VAR
-    # We grab the secret cookies from Render and write them to a temp file
-    cookies_content = os.getenv("YOUTUBE_COOKIES")
-    if cookies_content:
+    # 1. LOAD AND FIX COOKIES
+    raw_cookies = os.getenv("YOUTUBE_COOKIES")
+    
+    if raw_cookies:
+        # Fix 1: Convert literal "\n" characters back to real newlines
+        # (Render sometimes escapes them when you paste)
+        clean_cookies = raw_cookies.replace(r"\n", "\n")
+        
+        # Fix 2: Ensure it has the strict Netscape header
+        if not clean_cookies.startswith("# Netscape"):
+            clean_cookies = "# Netscape HTTP Cookie File\n" + clean_cookies
+
         with open(cookie_file, "w") as f:
-            f.write(cookies_content)
+            f.write(clean_cookies)
+            
+        print(f"🍪 Cookies loaded! First 50 chars: {clean_cookies[:50]}")
     else:
         print("⚠️ WARNING: No cookies found in environment variables!")
 
@@ -69,8 +80,8 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'cookiefile': cookie_file,  # <--- USE THE COOKIES
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 
+        'cookiefile': cookie_file,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     }
 
     try:
@@ -78,14 +89,12 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
             print(f"⬇️ Downloading: {video_url}...")
             ydl.download([video_url])
         
-        # Cleanup the cookie file (Security)
         if os.path.exists(cookie_file):
             os.remove(cookie_file)
-            
         return f"{output_path}.mp3"
+
     except Exception as e:
         print(f"❌ Download Error: {e}")
-        # Cleanup cookies even if it fails
         if os.path.exists(cookie_file):
             os.remove(cookie_file)
         return None
