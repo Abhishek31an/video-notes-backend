@@ -42,12 +42,12 @@ app.add_middleware(
 os.makedirs("static", exist_ok=True)
 # --- 2. AUDIO ENGINE (Video Download) ---
 # --- 2. AUDIO ENGINE (Video Download) ---
+# --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
     """
     Hybrid Downloader:
-    1. Tries a Public API (Cobalt) to get a direct link (Bypasses YouTube Block).
-    2. Downloads that link directly.
-    3. Falls back to yt-dlp if API fails.
+    1. Tries multiple Cobalt API mirrors (Bypasses YouTube Block).
+    2. Falls back to yt-dlp if APIs fail.
     """
     output_path = os.path.join(os.getcwd(), output_filename + ".mp3")
     
@@ -57,20 +57,27 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
 
     print(f"🔄 Trying API Download for: {video_url}")
 
-    # --- STRATEGY 1: COBALT API (The Cloud Bypass) ---
-    # These are public instances that process the video for us
+    # --- STRATEGY 1: COBALT API MIRRORS (The Cloud Bypass) ---
+    # These are public instances that process the video for us.
+    # We rotate through them to find one that is online.
     cobalt_instances = [
-        "https://co.wuk.sh/api/json",
-        "https://api.cobalt.tools/api/json", 
-        "https://cobalt.xy2401.com/api/json"
+        "https://api.cobalt.tools/api/json",      # Official Instance
+        "https://cobalt.tacohitbox.com/api/json", # Reliable Mirror
+        "https://coapi.kelig.me/api/json",        # Reliable Mirror
+        "https://cobalt-api.ayo.tf/api/json",     # Reliable Mirror
+        "https://api.oxidenetworks.com/api/json", # Backup
     ]
+
+    # Shuffle to distribute load (and avoid hitting the same bad one first)
+    random.shuffle(cobalt_instances)
 
     for api_url in cobalt_instances:
         try:
+            print(f"🌐 Testing API: {api_url} ...")
             headers = {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
             }
             
             data = {
@@ -81,13 +88,14 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
                 "isAudioOnly": True
             }
 
-            # Ask the API for a download link
-            response = requests.post(api_url, json=data, headers=headers, timeout=10)
+            response = requests.post(api_url, json=data, headers=headers, timeout=12)
             
             if response.status_code == 200:
                 result = response.json()
-                if "url" in result:
-                    direct_link = result["url"]
+                # Different instances return the link in different keys ('url' or 'picker')
+                direct_link = result.get("url") or result.get("picker", [{}])[0].get("url")
+                
+                if direct_link:
                     print(f"✅ API Success! Downloading from: {api_url}")
                     
                     # Download the actual file from the link
@@ -99,18 +107,30 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
                     
                     return output_path
         except Exception as e:
-            print(f"⚠️ API {api_url} failed: {e}")
-            continue # Try next instance
+            print(f"⚠️ API {api_url} failed. Trying next... ({str(e)[:50]})")
+            continue 
 
-    # --- STRATEGY 2: FALLBACK TO YT-DLP (Your old code) ---
+    # --- STRATEGY 2: FALLBACK TO YT-DLP (Internal) ---
     print("⚠️ All APIs failed. Falling back to internal yt-dlp...")
     
-    # (Keep your existing cookie logic here as a last resort)
-    cookie_file = "cookies.txt" 
-    # ... [Insert your previous cookie/yt-dlp logic here if you want, 
-    #      but usually if API fails, this will fail too on Render] ...
+    # Simple yt-dlp configuration as last resort
+    import yt_dlp
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': os.path.join(os.getcwd(), output_filename),
+        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '32'}],
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+    }
     
-    return None
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
+        return f"{output_path}"
+    except Exception as e:
+        print(f"❌ Internal Download Error: {e}")
+        return None
 
 # --- 3. AI ENGINE (Transcription & Generation) ---
 MODEL_PRIORITY_LIST = [
