@@ -41,14 +41,26 @@ os.makedirs("static", exist_ok=True)
 # --- 2. AUDIO ENGINE (Video Download) ---
 # --- 2. AUDIO ENGINE (Video Download) ---
 # --- 2. AUDIO ENGINE (Video Download) ---
+# --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
-    """Downloads audio using Android Client to bypass Bot Detection."""
+    """Downloads audio using Cookies to bypass Bot Detection."""
     output_path = os.path.join(os.getcwd(), output_filename)
+    cookie_file = os.path.join(os.getcwd(), "cookies.txt")
     
+    # 1. CREATE COOKIE FILE FROM ENV VAR
+    # We grab the secret cookies from Render and write them to a temp file
+    cookies_content = os.getenv("YOUTUBE_COOKIES")
+    if cookies_content:
+        with open(cookie_file, "w") as f:
+            f.write(cookies_content)
+    else:
+        print("⚠️ WARNING: No cookies found in environment variables!")
+
+    # Cleanup old audio
     if os.path.exists(f"{output_path}.mp3"):
         os.remove(f"{output_path}.mp3")
 
-    # CONFIGURATION TO BYPASS "SIGN IN" CHECK
+    # 2. CONFIGURE DOWNLOADER
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_path,
@@ -57,22 +69,25 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        # ⬇️ THIS IS THE MAGIC FIX ⬇️
-        # We tell YouTube we are an Android device.
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-            }
-        }
+        'cookiefile': cookie_file,  # <--- USE THE COOKIES
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             print(f"⬇️ Downloading: {video_url}...")
             ydl.download([video_url])
+        
+        # Cleanup the cookie file (Security)
+        if os.path.exists(cookie_file):
+            os.remove(cookie_file)
+            
         return f"{output_path}.mp3"
     except Exception as e:
         print(f"❌ Download Error: {e}")
+        # Cleanup cookies even if it fails
+        if os.path.exists(cookie_file):
+            os.remove(cookie_file)
         return None
 
 # --- 3. AI ENGINE (Transcription & Generation) ---
