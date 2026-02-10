@@ -1,26 +1,21 @@
 import os
 import time
 import json
-import math
-import random
-import requests
-from urllib.parse import urlparse, parse_qs
-
-# --- Third Party Libraries ---
+import shutil
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from groq import Groq
 import google.generativeai as genai
-from fastapi import FastAPI, Form
-from fastapi.middleware.cors import CORSMiddleware
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not GROQ_API_KEY or not GEMINI_API_KEY:
-    print("⚠️  Warning: API Keys not found in .env. Ensure they are set in Render Environment Variables.")
+    print("⚠️ Warning: API Keys missing.")
 
 # Initialize Clients
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -28,7 +23,6 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
 
-# --- SECURITY CONFIGURATION (CORS) ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,314 +31,87 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-os.makedirs("static", exist_ok=True)
+# --- HELPER FUNCTIONS ---
 
-# --- 2. AUDIO ENGINE (The Federated Downloader) ---
-
-# Expanded Cobalt List (Mixed reliability, high rotation)
-COBALT_INSTANCES = [
-    "https://api.cobalt.best",
-    "https://cobalt.moskas.io",
-    "https://cobalt.xy2401.com",
-    "https://api.cobalt.kwiatekmiki.pl",
-    "https://cobalt.steamys.me",
-    "https://cobalt.q11.app",
-    "https://api.cobalt.minaev.su",
-    "https://cobalt.lacus.mynetgear.com",
-    "https://cobalt.mc.hzuccon.com",
-    "https://api.server.cobalt.tools",
-    "https://cobalt.154.53.58.117.sslip.io",
-]
-
-# Expanded Piped List (Frontend APIs)
-PIPED_INSTANCES = [
-    "https://pipedapi.tokhmi.xyz",
-    "https://pipedapi.moomoo.me",
-    "https://pipedapi.syncpundit.io",
-    "https://pipedapi.kavin.rocks",
-    "https://piped-api.lunar.icu",
-    "https://ytapi.dc09.ru",
-    "https://pipedapi.r4fo.com",
-    "https://api.piped.yt",
-    "https://pipedapi.rivo.lol",
-    "https://api-piped.mha.fi",
-    "https://pipedapi.leptons.xyz",
-]
-
-def get_video_id(url):
-    """Extracts video ID from various YouTube URL formats."""
+def transcribe_audio(file_path):
+    """Transcribes uploaded audio using Groq."""
     try:
-        query = urlparse(url)
-        if query.hostname == 'youtu.be':
-            return query.path[1:]
-        if query.hostname in ('www.youtube.com', 'youtube.com'):
-            if query.path == '/watch':
-                p = parse_qs(query.query)
-                return p['v'][0]
-            if query.path[:7] == '/embed/':
-                return query.path.split('/')[2]
-            if query.path[:3] == '/v/':
-                return query.path.split('/')[3]
-    except Exception:
-        return None
-    return None
-
-def download_audio_federated(video_url: str, output_filename="temp_audio"):
-    """
-    Downloader V5.1: Massive Rotation Strategy.
-    Brute-forces through a large list of mirrors to find one that allows Render IPs.
-    """
-    output_path = os.path.join(os.getcwd(), output_filename + ".mp3")
-    
-    if os.path.exists(output_path):
-        os.remove(output_path)
-    
-    print(f"🚀 Starting Federated Download for: {video_url}")
-
-    # --- STRATEGY A: COBALT ROTATOR ---
-    print(f"⚔️  Attempting {len(COBALT_INSTANCES)} Cobalt Instances...")
-    
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-
-    cobalt_payload = {
-        "url": video_url,
-        "vCodec": "h264",
-        "vQuality": "720",
-        "aFormat": "mp3",
-        "isAudioOnly": True
-    }
-
-    random.shuffle(COBALT_INSTANCES)
-
-    for instance in COBALT_INSTANCES:
-        try:
-            base_url = instance.rstrip("/")
-            api_url = f"{base_url}/api/json"
-            
-            # Short timeout (6s) to skip dead servers fast
-            resp = requests.post(api_url, json=cobalt_payload, headers=headers, timeout=6)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                download_link = data.get("url") or data.get("picker", [{}])[0].get("url") or data.get("audio")
-                
-                if download_link:
-                    print(f"✅ Link found via {base_url}! Downloading...")
-                    with requests.get(download_link, stream=True, timeout=30) as r:
-                        r.raise_for_status()
-                        with open(output_path, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                f.write(chunk)
-                    
-                    if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-                        print(f"🎉 Success via Cobalt: {base_url}")
-                        return output_path
-            
-        except Exception:
-            continue
-
-    # --- STRATEGY B: PIPED API FALLBACK ---
-    print(f"\n🛡️ Cobalt failed. Engaging {len(PIPED_INSTANCES)} Piped Mirrors...")
-    
-    video_id = get_video_id(video_url)
-    if not video_id:
-        print("❌ Could not extract Video ID for Piped.")
-        return None
-
-    random.shuffle(PIPED_INSTANCES)
-
-    for instance in PIPED_INSTANCES:
-        try:
-            base_url = instance.rstrip("/")
-            api_url = f"{base_url}/streams/{video_id}"
-            
-            resp = requests.get(api_url, timeout=6)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                audio_streams = data.get("audioStreams", [])
-                
-                # Prioritize m4a/mp3
-                target_stream = next((s for s in audio_streams if s.get("mimeType", "").startswith("audio")), None)
-                
-                if target_stream:
-                    stream_url = target_stream["url"]
-                    print(f"✅ Stream found via {base_url}! Downloading...")
-                    
-                    with requests.get(stream_url, stream=True, timeout=30) as r:
-                        r.raise_for_status()
-                        with open(output_path, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                f.write(chunk)
-                                
-                    if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-                        print(f"🎉 Success via Piped: {base_url}")
-                        return output_path
-                
-        except Exception:
-            continue
-
-    print("💀 Total Failure: All mirrors blocked or down.")
-    return None
-
-
-# --- 3. AI ENGINE (Transcription & Generation) ---
-
-MODEL_PRIORITY_LIST = [
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
-]
-
-def get_working_gemini_response(prompt_parts):
-    """Helper: Tries multiple Gemini models until one works."""
-    for i, model_name in enumerate(MODEL_PRIORITY_LIST):
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt_parts)
-            return response.text
-        except Exception as e:
-            error_msg = str(e)
-            if "429" in error_msg:
-                print(f"⚠️ Quota Limit on {model_name}. Switching...")
-                time.sleep(1)
-                continue
-            elif "404" in error_msg:
-                continue
-            else:
-                print(f"❌ Error on {model_name}: {e}")
-                continue
-
-    return "Sorry, the AI is currently overloaded. Please wait 1 minute and try again."
-
-def transcribe_with_gemini(audio_path):
-    """Backup transcription using Gemini."""
-    print("⚠️ Switching to Gemini Backup...")
-    try:
-        print("   -> Uploading to Gemini...")
-        audio_file = genai.upload_file(path=audio_path)
-        
-        while audio_file.state.name == "PROCESSING":
-            time.sleep(1)
-            audio_file = genai.get_file(audio_file.name)
-
-        if audio_file.state.name == "FAILED":
-            raise ValueError("Gemini file processing failed.")
-
-        prompt = [audio_file, "Transcribe exactly word for word. Output raw text."]
-        return get_working_gemini_response(prompt)
-    except Exception as e:
-        print(f"❌ Gemini Transcribe Error: {e}")
-        return None
-
-def transcribe_audio(audio_path):
-    """Primary transcription using Groq (Whisper)."""
-    print("🎙️ Transcribing with Groq...")
-    try:
-        with open(audio_path, "rb") as file:
+        with open(file_path, "rb") as file:
             return groq_client.audio.transcriptions.create(
-                file=(audio_path, file.read()),
+                file=(file_path, file.read()),
                 model="whisper-large-v3",
-                response_format="text",
-                language="en"
+                response_format="text"
             )
     except Exception as e:
-        print(f"⚠️ Groq Failed ({e}), switching to backup...")
-        return transcribe_with_gemini(audio_path)
+        print(f"Groq Error: {e}")
+        return None
 
-def generate_study_notes(transcript_text, target_language="English"):
-    """Generates notes + Quiz."""
-    if not transcript_text: return None
-
-    words = len(transcript_text.split())
-    target_length = max(300, min(1500, words // 2))
-
-    print(f"🧠 Generating Notes ({target_language})...")
-
+def generate_study_notes(text, language="English"):
+    """Generates notes using Gemini."""
+    model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
-    You are an expert AI tutor. 
-    Target Language: {target_language}.
+    You are an expert AI tutor. Target Language: {language}.
+    Create detailed study notes and a quiz from this transcript:
     
-    Generate:
-    1. A Comprehensive Markdown Summary.
-    2. Key Concepts (Bullet points).
-    3. A JSON Quiz block at the very end.
-
     Format:
-    # 📝 Video Summary
-    [Summary]
+    # 📝 Summary
+    [Content]
     ## 🔑 Key Concepts
-    - [Point 1]
-    - [Point 2]
+    - [Points]
     
     ```json
-    [
-        {{ "question": "...", "options": ["A", "B", "C", "D"], "answer": 0 }}
-    ]
+    [ {{ "question": "...", "options": ["A", "B"], "answer": 0 }} ]
     ```
-
-    **Transcript:**
-    {transcript_text[:50000]} 
+    
+    Transcript: {text[:50000]}
     """
-    return get_working_gemini_response(prompt)
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"AI Error: {e}"
 
-def chat_with_video(transcript_text, user_question):
-    """Chat Bot."""
-    prompt = f"""
-    You are a helpful and friendly AI Assistant.
-    
-    **Context (Video Transcript):**
-    {transcript_text[:20000]}
-    
-    **User Question:**
-    {user_question}
-    
-    Answer the user based on the video. If the answer isn't in the video, say so politely.
-    """
-    return get_working_gemini_response(prompt)
-
-
-# --- 4. API ENDPOINTS ---
+# --- ENDPOINTS ---
 
 @app.get("/")
-async def read_root():
-    return {"message": "✅ Backend is running! Access this via your Frontend URL."}
+async def root():
+    return {"status": "Online", "mode": "Client-Side-Handoff"}
 
-@app.post("/generate")
-async def generate_notes_endpoint(url: str = Form(...), language: str = Form(...)):
-    print(f"🚀 Processing: {url}")
+@app.post("/process-transcript")
+async def process_transcript(transcript: str = Form(...), language: str = Form(...)):
+    """
+    Method A: Frontend found the transcript (Fastest).
+    Directly generates notes.
+    """
+    if len(transcript) < 50:
+        raise HTTPException(status_code=400, detail="Transcript too short.")
     
-    # 1. Download
-    audio_file = download_audio_federated(url)
-    if not audio_file: 
-        return {"error": "Download failed. YouTube blocked all servers."}
+    notes = generate_study_notes(transcript, language)
+    return {"status": "success", "markdown": notes, "transcript": transcript}
 
+@app.post("/process-audio")
+async def process_audio(file: UploadFile = File(...), language: str = Form(...)):
+    """
+    Method B: Frontend downloaded audio and uploaded it here.
+    """
+    temp_filename = f"temp_{int(time.time())}.mp3"
+    
     try:
-        # 2. Transcribe
-        transcript = transcribe_audio(audio_file)
-        if not transcript: 
-            return {"error": "Transcription failed"}
-
-        # 3. Generate Notes
+        # Save uploaded file
+        with open(temp_filename, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # Transcribe
+        transcript = transcribe_audio(temp_filename)
+        if not transcript:
+            raise HTTPException(status_code=500, detail="Transcription failed")
+            
+        # Generate Notes
         notes = generate_study_notes(transcript, language)
-
-        # 4. Clean up audio file
-        if os.path.exists(audio_file): 
-            os.remove(audio_file)
-
+        
         return {"status": "success", "markdown": notes, "transcript": transcript}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.post("/chat")
-async def chat_endpoint(question: str = Form(...), transcript: str = Form(...)):
-    if not question or not transcript:
-        return {"answer": "Error: Missing data."}
-
-    answer = chat_with_video(transcript, question)
-    return {"answer": answer}
+        
+    finally:
+        # Cleanup
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
