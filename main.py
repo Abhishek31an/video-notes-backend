@@ -10,6 +10,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 # --- 1. CONFIGURATION ---
 load_dotenv()
@@ -25,6 +26,16 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
+
+# --- SECURITY CONFIGURATION (CORS) ---
+# This allows the frontend (Cloudflare) to talk to the backend (Render)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows ALL websites (Simplest for now)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"],
+)
 templates = Jinja2Templates(directory="templates")
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
