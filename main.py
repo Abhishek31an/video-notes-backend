@@ -155,3 +155,20 @@ async def process_audio(file: UploadFile = File(...), language: str = Form(...))
         # 4. Cleanup
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
+# --- ADD THIS TO main.py IF YOU WANT CHAT TO WORK ---
+@app.post("/chat")
+async def chat_endpoint(question: str = Form(...), transcript: str = Form(...)):
+    if not question or not transcript:
+        return {"answer": "Error: Missing data."}
+    
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    prompt = f"""
+    You are a helpful assistant. Answer the question based strictly on the transcript below.
+    User Question: {question}
+    Transcript Context: {transcript[:20000]}
+    """
+    try:
+        response = model.generate_content(prompt)
+        return {"answer": response.text}
+    except Exception as e:
+        return {"answer": "I'm having trouble thinking right now."}
