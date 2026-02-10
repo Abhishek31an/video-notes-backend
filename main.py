@@ -36,9 +36,7 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
     allow_headers=["*"],
 )
-templates = Jinja2Templates(directory="templates")
 os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
@@ -214,9 +212,9 @@ def chat_with_video(transcript_text, user_question):
 
 # --- 4. API ENDPOINTS ---
 
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+@app.get("/")
+async def read_root():
+    return {"message": "✅ Backend is running! Access this via your Frontend URL."}
 
 @app.post("/generate")
 async def generate_notes_endpoint(url: str = Form(...), language: str = Form(...)):
