@@ -39,12 +39,16 @@ app.add_middleware(
 os.makedirs("static", exist_ok=True)
 
 # --- 2. AUDIO ENGINE (Video Download) ---
+# --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
-    """Downloads and compresses audio to fit API limits."""
+    """Downloads audio with Anti-Bot protection."""
     output_path = os.path.join(os.getcwd(), output_filename)
+    
+    # Cleanup old files first
     if os.path.exists(f"{output_path}.mp3"):
         os.remove(f"{output_path}.mp3")
 
+    # ANTI-BOT OPTIONS
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_path,
@@ -52,6 +56,10 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
         'postprocessor_args': ['-ac', '1', '-ar', '16000'],
         'quiet': True,
         'no_warnings': True,
+        'nocheckcertificate': True, # Ignore SSL errors
+        # SPOOFING A REAL BROWSER:
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'referer': 'https://www.google.com/',
     }
 
     try:
