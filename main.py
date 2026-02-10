@@ -20,7 +20,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not GROQ_API_KEY or not GEMINI_API_KEY:
-    # We print a warning but don't crash, in case you set them in Render Dashboard directly
     print("⚠️  Warning: API Keys not found in .env. Ensure they are set in Render Environment Variables.")
 
 # Initialize Clients
@@ -32,49 +31,63 @@ app = FastAPI()
 # --- SECURITY CONFIGURATION (CORS) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Create static folder for temp files if it doesn't exist
 os.makedirs("static", exist_ok=True)
 
-
-# --- 2. AUDIO ENGINE (The New Federated Downloader) ---
-
-# --- 2. AUDIO ENGINE (The Federated Downloader V2) ---
+# --- 2. AUDIO ENGINE (The Federated Downloader) ---
 
 # Expanded Cobalt List (Mixed reliability, high rotation)
 COBALT_INSTANCES = [
-    "https://api.cobalt.best",                 # Reliable
-    "https://cobalt.moskas.io",                # Frequent updates
-    "https://cobalt.xy2401.com",               # Backup
-    "https://api.cobalt.kwiatekmiki.pl",       # Poland
-    "https://cobalt.steamys.me",               # US
-    "https://cobalt.q11.app",                  # US
-    "https://api.cobalt.minaev.su",            # Russia (often ignores IP bans)
-    "https://cobalt.lacus.mynetgear.com",      # Home hosting
-    "https://cobalt.mc.hzuccon.com",           # Brazil
-    "https://api.server.cobalt.tools",         # Official (Strict)
-    "https://cobalt.154.53.58.117.sslip.io",   # Direct IP
+    "https://api.cobalt.best",
+    "https://cobalt.moskas.io",
+    "https://cobalt.xy2401.com",
+    "https://api.cobalt.kwiatekmiki.pl",
+    "https://cobalt.steamys.me",
+    "https://cobalt.q11.app",
+    "https://api.cobalt.minaev.su",
+    "https://cobalt.lacus.mynetgear.com",
+    "https://cobalt.mc.hzuccon.com",
+    "https://api.server.cobalt.tools",
+    "https://cobalt.154.53.58.117.sslip.io",
 ]
 
 # Expanded Piped List (Frontend APIs)
 PIPED_INSTANCES = [
-    "https://pipedapi.tokhmi.xyz",             # US
-    "https://pipedapi.moomoo.me",              # UK
-    "https://pipedapi.syncpundit.io",          # India/Global
-    "https://pipedapi.kavin.rocks",            # Official (Often strict)
-    "https://piped-api.lunar.icu",             # Germany
-    "https://ytapi.dc09.ru",                   # Russia
-    "https://pipedapi.r4fo.com",               # Germany
-    "https://api.piped.yt",                    # Germany
-    "https://pipedapi.rivo.lol",               # Chile
-    "https://api-piped.mha.fi",                # Finland
-    "https://pipedapi.leptons.xyz",            # Austria
+    "https://pipedapi.tokhmi.xyz",
+    "https://pipedapi.moomoo.me",
+    "https://pipedapi.syncpundit.io",
+    "https://pipedapi.kavin.rocks",
+    "https://piped-api.lunar.icu",
+    "https://ytapi.dc09.ru",
+    "https://pipedapi.r4fo.com",
+    "https://api.piped.yt",
+    "https://pipedapi.rivo.lol",
+    "https://api-piped.mha.fi",
+    "https://pipedapi.leptons.xyz",
 ]
+
+def get_video_id(url):
+    """Extracts video ID from various YouTube URL formats."""
+    try:
+        query = urlparse(url)
+        if query.hostname == 'youtu.be':
+            return query.path[1:]
+        if query.hostname in ('www.youtube.com', 'youtube.com'):
+            if query.path == '/watch':
+                p = parse_qs(query.query)
+                return p['v'][0]
+            if query.path[:7] == '/embed/':
+                return query.path.split('/')[2]
+            if query.path[:3] == '/v/':
+                return query.path.split('/')[3]
+    except Exception:
+        return None
+    return None
 
 def download_audio_federated(video_url: str, output_filename="temp_audio"):
     """
@@ -130,13 +143,8 @@ def download_audio_federated(video_url: str, output_filename="temp_audio"):
                     if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
                         print(f"🎉 Success via Cobalt: {base_url}")
                         return output_path
-            else:
-                # Print specific error codes (403=Forbidden, 429=RateLimit)
-                # print(f"   -> {base_url} returned {resp.status_code}")
-                pass
             
-        except Exception as e:
-            # print(f"   -> {instance} Error: {str(e)[:50]}...")
+        except Exception:
             continue
 
     # --- STRATEGY B: PIPED API FALLBACK ---
@@ -176,15 +184,14 @@ def download_audio_federated(video_url: str, output_filename="temp_audio"):
                     if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
                         print(f"🎉 Success via Piped: {base_url}")
                         return output_path
-            else:
-                # print(f"   -> {base_url} returned {resp.status_code}")
-                pass
                 
         except Exception:
             continue
 
     print("💀 Total Failure: All mirrors blocked or down.")
     return None
+
+
 # --- 3. AI ENGINE (Transcription & Generation) ---
 
 MODEL_PRIORITY_LIST = [
@@ -219,11 +226,9 @@ def transcribe_with_gemini(audio_path):
     """Backup transcription using Gemini."""
     print("⚠️ Switching to Gemini Backup...")
     try:
-        # Upload file to Gemini
         print("   -> Uploading to Gemini...")
         audio_file = genai.upload_file(path=audio_path)
         
-        # Wait for processing
         while audio_file.state.name == "PROCESSING":
             time.sleep(1)
             audio_file = genai.get_file(audio_file.name)
@@ -256,9 +261,7 @@ def generate_study_notes(transcript_text, target_language="English"):
     """Generates notes + Quiz."""
     if not transcript_text: return None
 
-    # Estimate length constraints
     words = len(transcript_text.split())
-    # Cap output to avoid timeouts on huge videos
     target_length = max(300, min(1500, words // 2))
 
     print(f"🧠 Generating Notes ({target_language})...")
@@ -288,13 +291,10 @@ def generate_study_notes(transcript_text, target_language="English"):
     **Transcript:**
     {transcript_text[:50000]} 
     """
-    # Note: We truncate transcript to 50k chars to stay safe within limits for Flash models
     return get_working_gemini_response(prompt)
 
 def chat_with_video(transcript_text, user_question):
     """Chat Bot."""
-    # print(f"💬 Chatting... Q: {user_question[:20]}...")
-
     prompt = f"""
     You are a helpful and friendly AI Assistant.
     
