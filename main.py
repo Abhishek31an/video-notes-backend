@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+import base64
 
 # --- 1. CONFIGURATION ---
 load_dotenv()
@@ -43,27 +44,33 @@ os.makedirs("static", exist_ok=True)
 # --- 2. AUDIO ENGINE (Video Download) ---
 # --- 2. AUDIO ENGINE (Video Download) ---
 # --- 2. AUDIO ENGINE (Video Download) ---
+  # <--- Make sure to import this at the top of your file!
+
+# --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
-    """Downloads audio using Cookies (with Auto-Fix for formatting)."""
+    """Downloads audio using Base64 Encoded Cookies."""
     output_path = os.path.join(os.getcwd(), output_filename)
     cookie_file = os.path.join(os.getcwd(), "cookies.txt")
     
-    # 1. LOAD AND FIX COOKIES
-    raw_cookies = os.getenv("YOUTUBE_COOKIES")
+    # 1. DECODE COOKIES
+    encoded_cookies = os.getenv("YOUTUBE_COOKIES")
     
-    if raw_cookies:
-        # Fix 1: Convert literal "\n" characters back to real newlines
-        # (Render sometimes escapes them when you paste)
-        clean_cookies = raw_cookies.replace(r"\n", "\n")
-        
-        # Fix 2: Ensure it has the strict Netscape header
-        if not clean_cookies.startswith("# Netscape"):
-            clean_cookies = "# Netscape HTTP Cookie File\n" + clean_cookies
+    if encoded_cookies:
+        try:
+            # Decode the Base64 string back to original text
+            decoded_bytes = base64.b64decode(encoded_cookies)
+            decoded_str = decoded_bytes.decode('utf-8')
 
-        with open(cookie_file, "w") as f:
-            f.write(clean_cookies)
-            
-        print(f"🍪 Cookies loaded! First 50 chars: {clean_cookies[:50]}")
+            # Ensure header exists
+            if not decoded_str.startswith("# Netscape"):
+                decoded_str = "# Netscape HTTP Cookie File\n" + decoded_str
+
+            with open(cookie_file, "w") as f:
+                f.write(decoded_str)
+                
+            print(f"🍪 Cookies decoded successfully!")
+        except Exception as e:
+            print(f"⚠️ Cookie Decode Error: {e}")
     else:
         print("⚠️ WARNING: No cookies found in environment variables!")
 
