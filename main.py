@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import base64
 import requests # <--- Add this at the very top if missing!
 import random
+import re
 
 # --- 1. CONFIGURATION ---
 load_dotenv()
@@ -43,11 +44,14 @@ os.makedirs("static", exist_ok=True)
 # --- 2. AUDIO ENGINE (Video Download) ---
 
 # --- 2. AUDIO ENGINE (Video Download) ---
+
+# --- 2. AUDIO ENGINE (Video Download) ---
 def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
     """
-    Hybrid Downloader:
-    1. Tries a MASSIVE list of Cobalt API mirrors (Bypasses YouTube Block).
-    2. Falls back to yt-dlp if absolutely everything fails.
+    Hybrid Downloader V3:
+    1. Cobalt APIs (Primary - Fast)
+    2. Invidious APIs (Backup - Reliable)
+    3. NO local yt-dlp (Because Render IP is banned)
     """
     output_path = os.path.join(os.getcwd(), output_filename + ".mp3")
     
@@ -55,36 +59,28 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
     if os.path.exists(output_path):
         os.remove(output_path)
 
-    print(f"🔄 Trying API Download for: {video_url}")
+    print(f"🔄 Processing: {video_url}")
 
-    # --- STRATEGY 1: COBALT API MIRRORS (The Cloud Bypass) ---
-    # These are verified working instances as of 2025.
+    # --- STRATEGY 1: COBALT API MIRRORS ---
+    # We rotate through these. If one is down, we try the next.
     cobalt_instances = [
-        # Reliable "ggtyler" instances (US/Europe) - VERY STABLE
-        "https://nyc1.coapi.ggtyler.dev/api/json",
-        "https://cal1.coapi.ggtyler.dev/api/json",
-        "https://par1.coapi.ggtyler.dev/api/json",
-        
-        # Community Instances (Backups)
-        "https://api.cobalt.tools/api/json",   # Official
-        "https://cobalt.minaev.su/api/json",
-        "https://yt.corebyte.me/api/json",
-        "https://cobalt.fariz.dev/api/json",
-        "https://api.seventyhost.net/api/json",
+        "https://api.cobalt.tools/api/json",      # Official
+        "https://cobalt.xy2401.com/api/json",     # Backup 1
+        "https://cobalt.kwiatekmiki.pl/api/json", # Backup 2
+        "https://cobalt.lacus.mynetgear.com/api/json"
     ]
-
-    # Shuffle to distribute load
+    
     random.shuffle(cobalt_instances)
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    }
 
     for api_url in cobalt_instances:
         try:
-            # print(f"🌐 Testing API: {api_url} ...") 
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-            
+            # print(f"🌐 Trying Cobalt: {api_url}")
             data = {
                 "url": video_url,
                 "vCodec": "h264",
@@ -92,61 +88,71 @@ def download_audio_nuclear(video_url: str, output_filename="temp_audio"):
                 "aFormat": "mp3",
                 "isAudioOnly": True
             }
-
-            # Short timeout (6s) so we don't wait too long on dead servers
-            response = requests.post(api_url, json=data, headers=headers, timeout=6)
+            
+            # 5s timeout to fail fast
+            response = requests.post(api_url, json=data, headers=headers, timeout=5)
             
             if response.status_code == 200:
                 result = response.json()
+                direct_link = result.get("url") or result.get("picker", [{}])[0].get("url") or result.get("audio")
                 
-                # Logic to handle different response formats (URL vs Picker)
-                direct_link = None
-                if "url" in result:
-                    direct_link = result["url"]
-                elif "picker" in result and len(result["picker"]) > 0:
-                    direct_link = result["picker"][0]["url"]
-                elif "audio" in result:
-                    direct_link = result["audio"]
-
                 if direct_link:
-                    print(f"✅ API Success! Downloading from: {api_url}")
-                    
-                    # Download the actual file
+                    print(f"✅ Cobalt Success! Downloading from: {api_url}")
+                    # Download the content
                     with requests.get(direct_link, stream=True) as r:
                         r.raise_for_status()
                         with open(output_path, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
-                    
-                    # Check if file is valid (larger than 1KB)
-                    if os.path.getsize(output_path) > 1024:
-                        return output_path
-                    else:
-                        print(f"⚠️ API {api_url} returned empty file. Skipping.")
-        except Exception as e:
-            # print(f"⚠️ API {api_url} failed: {e}") 
-            continue 
+                    return output_path
+        except Exception:
+            continue # Silently try next
 
-    # --- STRATEGY 2: FALLBACK TO YT-DLP (Internal) ---
-    print("⚠️ All APIs failed. Falling back to internal yt-dlp...")
+    # --- STRATEGY 2: INVIDIOUS API (Backup) ---
+    # If Cobalt fails, we use Invidious API to get the raw stream
+    print("⚠️ Cobalt failed. Trying Invidious Backup...")
     
-    import yt_dlp
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(os.getcwd(), output_filename),
-        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '32'}],
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-    }
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
-        return f"{output_path}"
-    except Exception as e:
-        print(f"❌ Internal Download Error: {e}")
-        return None
+    # Extract Video ID (e.g. ySus5ZS0b94)
+    video_id = ""
+    if "v=" in video_url:
+        video_id = video_url.split("v=")[1].split("&")[0]
+    elif "youtu.be" in video_url:
+        video_id = video_url.split("/")[-1]
+
+    if video_id:
+        invidious_instances = [
+            "https://inv.tux.pizza",
+            "https://invidious.drgns.space",
+            "https://inv.zzls.xyz",
+        ]
+        
+        for inv_url in invidious_instances:
+            try:
+                # Get Video Info
+                api_req = f"{inv_url}/api/v1/videos/{video_id}"
+                resp = requests.get(api_req, timeout=5)
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Find an audio stream (m4a or webm)
+                    if "adaptiveFormats" in data:
+                        for fmt in data["adaptiveFormats"]:
+                            if "audio" in fmt.get("type", ""):
+                                stream_url = fmt.get("url")
+                                print(f"✅ Invidious Success! Downloading from: {inv_url}")
+                                
+                                # Download stream
+                                with requests.get(stream_url, stream=True) as r:
+                                    r.raise_for_status()
+                                    with open(output_path, 'wb') as f:
+                                        for chunk in r.iter_content(chunk_size=8192):
+                                            f.write(chunk)
+                                return output_path
+            except Exception:
+                continue
+
+    print("❌ All external APIs failed. Cannot download video on this IP.")
+    return None
 # --- 3. AI ENGINE (Transcription & Generation) ---
 MODEL_PRIORITY_LIST = [
     'gemini-2.5-flash',
